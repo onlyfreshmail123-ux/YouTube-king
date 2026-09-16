@@ -18,23 +18,230 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({
-    ok: true
-  });
+  res.json({ ok: true });
 });
 
 function isAllowedVideoUrl(value) {
   try {
     const url = new URL(value);
-
-    const host = url.hostname
-      .toLowerCase()
-      .replace(/^www\./, '');
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
 
     return (
       host === 'youtube.com' ||
       host.endsWith('.youtube.com') ||
       host === 'youtu.be' ||
+      host === 'youtube-nocookie.com' ||
+      host.endsWith('.youtube-nocookie.com')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function cleanup(filePath) {
+  fs.unlink(filePath, () => {});
+}
+
+app.get('/api/download', (req, res) => {
+  const videoUrl =
+    typeof req.query.url === 'string'
+      ? req.query.url.trim()
+      : '';
+
+  if (!videoUrl) {
+    return res.status(400).send('Video URL is required');
+  }
+
+  if (!isAllowedVideoUrl(videoUrl)) {
+    return res.status(400).send('Please provide a valid YouTube URL');
+  }
+
+  const id = `${Date.now()}-${crypto.randomBytes(5).toString('hex')}`;
+
+  const outputTemplate = path.join(
+    '/tmp',
+    `youtube-${id}.%(ext)s`
+  );
+
+  const args = [
+    '--no-playlist',
+
+    // JavaScript runtime
+    '--js-runtimes',
+    'node',
+
+    // Use mweb client for PO Token support
+    '--extractor-args',
+    'youtube:player-client=mweb',
+
+    // Connect yt-dlp to local BGUTIL PO Token server
+    '--extractor-args',
+    'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
+
+    // Download
+    '--format',
+    'bestvideo+bestaudio/best',
+
+    '--merge-output-format',
+    'mp4',
+
+    // Retry settings
+    '--retries',
+    '3',
+
+    '--fragment-retries',
+    '3',
+
+    '--socket-timeout',
+    '30',
+
+    // Output
+    '--output',
+    outputTemplate,
+
+    '--print',
+    'after_move:filepath',
+
+    '--',
+    videoUrl
+  ];
+
+  console.log('======================================');
+  console.log(`Starting download: ${videoUrl}`);
+  console.log('PO Token Provider: BGUTIL');
+  console.log('PO Token Server: http://127.0.0.1:4416');
+  console.log('YouTube Client: mweb');
+  console.log('======================================');
+
+  const child = spawn(YTDLP, args, {
+    env: process.env
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', chunk => {
+    const text = chunk.toString();
+
+    stdout += text;
+
+    if (stdout.length > 10000) {
+      stdout = stdout.slice(-10000);
+    }
+
+    console.log(text.trim());
+  });
+
+  child.stderr.on('data', chunk => {
+    const text = chunk.toString();
+
+    stderr += text;
+
+    if (stderr.length > 30000) {
+      stderr = stderr.slice(-30000);
+    }
+
+    console.error(text.trim());
+  });
+
+  child.on('error', error => {
+    console.error('Could not start yt-dlp:', error);
+
+    if (!res.headersSent) {
+      return res
+        .status(500)
+        .send('Downloader is not available on the server.');
+    }
+  });
+
+  child.on('close', code => {
+    console.log(`yt-dlp exited with code ${code}`);
+
+    if (code !== 0) {
+      console.error('========== yt-dlp ERROR ==========');
+      console.error(stderr);
+      console.error('===================================');
+
+      if (!res.headersSent) {
+        return res
+          .status(500)
+          .send('Download failed. Please try again.');
+      }
+
+      return;
+    }
+
+    const lines = stdout
+      .trim()
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    let outputPath =
+      lines.length
+        ? lines[lines.length - 1]
+        : '';
+
+    // Fallback: find generated file
+    if (!outputPath || !fs.existsSync(outputPath)) {
+      const matches = fs
+        .readdirSync('/tmp')
+        .filter(name =>
+          name.startsWith(`youtube-${id}.`)
+        )
+        .map(name =>
+          path.join('/tmp', name)
+        );
+
+      outputPath =
+        matches.find(file =>
+          fs.existsSync(file)
+        ) || '';
+    }
+
+    if (!outputPath || !fs.existsSync(outputPath)) {
+      console.error(
+        'yt-dlp completed but output file was not found.'
+      );
+
+      console.error('stdout:', stdout);
+      console.error('stderr:', stderr);
+
+      if (!res.headersSent) {
+        return res
+          .status(500)
+          .send('Download failed. Please try again.');
+      }
+
+      return;
+    }
+
+    console.log(
+      `Download complete: ${outputPath}`
+    );
+
+    res.download(
+      outputPath,
+      'video.mp4',
+      error => {
+        cleanup(outputPath);
+
+        if (error) {
+          console.error(
+            'Error sending downloaded file:',
+            error
+          );
+        }
+      }
+    );
+  });
+});
+
+app.listen(port, () => {
+  console.log(
+    `Server running on port ${port}`
+  );
+});      host === 'youtu.be' ||
       host === 'youtube-nocookie.com' ||
       host.endsWith('.youtube-nocookie.com')
     );
