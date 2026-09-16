@@ -128,12 +128,14 @@ app.get("/api/download", async (req, res) => {
       "2",
 
       "--socket-timeout",
-      "30",
+"30",
 
-      "--no-warnings",
+"--verbose",
 
-      "--print",
-      "after_move:filepath",
+"--no-warnings",
+
+"--print",
+"after_move:filepath",
 
       "-o",
       outputTemplate,
