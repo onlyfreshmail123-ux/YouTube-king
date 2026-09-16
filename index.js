@@ -1,17 +1,14 @@
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const { spawn } = require("child_process");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+const YOINKU_API_KEY = process.env.YOINKU_API_KEY;
+const YOINKU_BASE = "https://yoinku.com/api/v1";
 
-app.use(express.json());
-
-// CORS without external package
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
@@ -20,280 +17,208 @@ app.use((req, res, next) => {
   next();
 });
 
-const PORT = process.env.PORT || 3000;
-
-const BGUTIL_URL =
-  process.env.BGUTIL_URL || "http://127.0.0.1:4416";
-
-function isYouTubeUrl(value) {
+function isYoutubeUrl(value) {
   try {
-    const url = new URL(value);
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
 
-    const hosts = [
-      "youtube.com",
-      "www.youtube.com",
-      "m.youtube.com",
-      "youtu.be",
-      "www.youtube-nocookie.com",
-    ];
+    if (host === "youtu.be") {
+      return !!u.pathname.slice(1);
+    }
 
-    return hosts.includes(url.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
+    if (
+      (host === "youtube.com" || host.endsWith(".youtube.com")) &&
+      u.searchParams.get("v")
+    ) {
+      return true;
+    }
+  } catch (_) {}
+
+  return false;
 }
 
-function qualityFormat(quality) {
-  switch (quality) {
-    case "720":
-      return "bestvideo[height<=720]+bestaudio/best[height<=720]/best";
+function pickFormat(formats, quality) {
+  const videos = (formats || [])
+    .filter(
+      f =>
+        f &&
+        f.kind === "video" &&
+        f.container === "mp4" &&
+        f.hasVideo &&
+        f.hasAudio
+    )
+    .map(f => ({
+      ...f,
+      heightNum: Number(f.height) || 0
+    }))
+    .filter(f => f.heightNum > 0)
+    .sort((a, b) => b.heightNum - a.heightNum);
 
-    case "480":
-      return "bestvideo[height<=480]+bestaudio/best[height<=480]/best";
-
-    case "360":
-      return "bestvideo[height<=360]+bestaudio/best[height<=360]/best";
-
-    case "best":
-    default:
-      return "bestvideo+bestaudio/best";
+  if (!videos.length) {
+    return null;
   }
+
+  if (quality === "Best available") {
+    return videos[0];
+  }
+
+  const wanted = Number(String(quality).replace("p", ""));
+
+  if (!wanted) {
+    return videos[0];
+  }
+
+  return (
+    videos.find(f => f.heightNum === wanted) ||
+    videos.find(f => f.heightNum < wanted) ||
+    videos[videos.length - 1]
+  );
 }
 
-app.get("/", (req, res) => {
+async function yoinku(path, params) {
+  const url = new URL(`${YOINKU_BASE}${path}`);
+
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "x-api-key": YOINKU_API_KEY
+    }
+  });
+
+  const data = await response.json().catch(() => null);
+
+  return {
+    response,
+    data
+  };
+}
+
+app.get("/", (_req, res) => {
   res.json({
-    status: "ok",
-    service: "GRAB IT YouTube Backend",
-    message: "Backend is running",
+    ok: true,
+    service: "GRAB IT backend",
+    provider: "Yoinku"
   });
 });
 
-app.get("/health", (req, res) => {
+app.get("/health", (_req, res) => {
   res.json({
-    status: "healthy",
-    bgutil: BGUTIL_URL,
+    ok: true,
+    yoinkuConfigured: Boolean(YOINKU_API_KEY)
   });
 });
 
 app.get("/api/download", async (req, res) => {
-  const videoUrl = req.query.url;
-  const quality = req.query.quality || "best";
-
-  if (!videoUrl) {
-    return res.status(400).json({
-      error: "YouTube URL is required",
+  if (!YOINKU_API_KEY) {
+    return res.status(500).json({
+      error: "YOINKU_API_KEY is not configured in Railway."
     });
   }
 
-  if (!isYouTubeUrl(videoUrl)) {
+  const url = String(req.query.url || "").trim();
+  const quality = String(
+    req.query.quality || "Best available"
+  ).trim();
+
+  if (!url || !isYoutubeUrl(url)) {
     return res.status(400).json({
-      error: "Only YouTube URLs are supported",
+      error: "Please provide a valid YouTube URL."
     });
   }
-
-  const outputDir = "/tmp/grab-it";
 
   try {
-    await fs.promises.mkdir(outputDir, {
-      recursive: true,
+    const infoResult = await yoinku("/info", {
+      url
     });
 
-    const outputTemplate = path.join(
-      outputDir,
-      "video-%(id)s.%(ext)s"
-    );
-
-    const args = [
-      "--no-playlist",
-
-      "--js-runtimes",
-      "node",
-
-      "--extractor-args",
-      "youtube:player-client=mweb",
-
-      "--extractor-args",
-      `youtubepot-bgutilhttp:base_url=${BGUTIL_URL}`,
-
-      "--format",
-      qualityFormat(quality),
-
-      "--merge-output-format",
-      "mp4",
-
-      "--retries",
-      "2",
-
-      "--fragment-retries",
-      "2",
-
-      "--socket-timeout",
-"30",
-
-"--verbose",
-
-"--no-warnings",
-
-"--print",
-"after_move:filepath",
-
-      "-o",
-      outputTemplate,
-
-      videoUrl,
-    ];
-
-    console.log(
-      `Starting download: ${videoUrl} (${quality})`
-    );
-
-    console.log(
-      "BGUTIL provider:",
-      BGUTIL_URL
-    );
-
-    const yt = spawn("yt-dlp", args);
-
-    let stdout = "";
-    let stderr = "";
-
-    yt.stdout.on("data", (data) => {
-      const text = data.toString();
-
-      stdout += text;
-
-      console.log("[yt-dlp]", text.trim());
-    });
-
-    yt.stderr.on("data", (data) => {
-      const text = data.toString();
-
-      stderr += text;
-
-      console.error("[yt-dlp]", text.trim());
-    });
-
-    yt.on("error", (error) => {
-      console.error(
-        "Failed to start yt-dlp:",
-        error
-      );
-
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: "Could not start yt-dlp",
-          details: error.message,
-        });
-      }
-    });
-
-    yt.on("close", async (code) => {
-      console.log(
-        `yt-dlp exited with code ${code}`
-      );
-
-      if (code !== 0) {
-        if (!res.headersSent) {
-          return res.status(500).json({
-            error: "YouTube download failed",
-            details: stderr.slice(-4000),
-          });
-        }
-
-        return;
-      }
-
-      const lines = stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      let outputFile = lines[lines.length - 1];
-
-      if (
-        !outputFile ||
-        !fs.existsSync(outputFile)
-      ) {
-        const files = await fs.promises.readdir(
-          outputDir
-        );
-
-        const candidates = files
-          .filter((file) =>
-            /\.(mp4|mkv|webm|mov)$/i.test(file)
-          )
-          .map((file) =>
-            path.join(outputDir, file)
-          )
-          .filter((file) =>
-            fs.existsSync(file)
-          );
-
-        if (candidates.length > 0) {
-          candidates.sort(
-            (a, b) =>
-              fs.statSync(b).mtimeMs -
-              fs.statSync(a).mtimeMs
-          );
-
-          outputFile = candidates[0];
-        }
-      }
-
-      if (
-        !outputFile ||
-        !fs.existsSync(outputFile)
-      ) {
-        return res.status(500).json({
-          error:
-            "Download finished but output file was not found",
-        });
-      }
-
-      console.log(
-        "Sending file:",
-        outputFile
-      );
-
-      res.download(
-        outputFile,
-        "video.mp4",
-        (error) => {
-          if (error) {
-            console.error(
-              "File download error:",
-              error
-            );
-          }
-
-          fs.unlink(
-            outputFile,
-            () => {}
-          );
-        }
-      );
-    });
-  } catch (error) {
-    console.error(
-      "Download handler error:",
-      error
-    );
-
-    if (!res.headersSent) {
-      res.status(500).json({
-        error: "Internal server error",
-        details: error.message,
+    if (
+      !infoResult.response.ok ||
+      !infoResult.data?.ok
+    ) {
+      return res.status(
+        infoResult.response.status || 502
+      ).json({
+        error: "Yoinku info request failed",
+        details:
+          infoResult.data?.error ||
+          "Unknown error"
       });
     }
+
+    const format = pickFormat(
+      infoResult.data.data?.formats,
+      quality
+    );
+
+    if (!format?.id) {
+      return res.status(422).json({
+        error:
+          "No compatible MP4 video format was returned by Yoinku."
+      });
+    }
+
+    const downloadResult = await yoinku("/download", {
+      url,
+      format: format.id,
+      redirect: "1"
+    });
+
+    if (
+      downloadResult.response.status >= 300 &&
+      downloadResult.response.status < 400
+    ) {
+      const location =
+        downloadResult.response.headers.get("location");
+
+      if (location) {
+        return res.redirect(302, location);
+      }
+    }
+
+    if (!downloadResult.response.ok) {
+      return res.status(
+        downloadResult.response.status || 502
+      ).json({
+        error: "Yoinku download request failed",
+        details:
+          downloadResult.data?.error ||
+          "Unknown error"
+      });
+    }
+
+    if (downloadResult.data?.url) {
+      return res.redirect(
+        302,
+        downloadResult.data.url
+      );
+    }
+
+    return res.status(502).json({
+      error:
+        "Yoinku did not return a download URL."
+    });
+  } catch (error) {
+    console.error("Yoinku error:", error);
+
+    return res.status(502).json({
+      error: "Unable to contact Yoinku",
+      details:
+        error?.message || String(error)
+    });
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log(
-    `Server running on port ${PORT}`
+    `GRAB IT backend running on port ${PORT}`
   );
 
   console.log(
-    `BGUTIL provider URL: ${BGUTIL_URL}`
+    `Yoinku API key configured: ${
+      YOINKU_API_KEY ? "yes" : "no"
+    }`
   );
 });
