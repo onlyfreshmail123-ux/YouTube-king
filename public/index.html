@@ -1,1 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
 
+  <title>GRAB IT — YouTube Downloader</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+    }
+
+    main {
+      width: min(720px, 92%);
+      margin: auto;
+      padding: 60px 0 40px;
+      flex: 1;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 42px;
+      letter-spacing: 2px;
+      margin: 0 0 10px;
+    }
+
+    .sub {
+      text-align: center;
+      color: #aaa;
+      margin: 0 0 32px;
+    }
+
+    .box {
+      background: #1b1b1b;
+      border: 1px solid #2d2d2d;
+      border-radius: 18px;
+      padding: 22px;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      padding: 15px;
+      border: 0;
+      border-radius: 12px;
+      font-size: 16px;
+    }
+
+    input,
+    select {
+      background: #292929;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    input {
+      outline: none;
+    }
+
+    button {
+      background: #fff;
+      color: #111;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    #msg {
+      min-height: 24px;
+      margin-top: 14px;
+      text-align: center;
+      color: #bbb;
+    }
+
+    #preview {
+      display: none;
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    #thumb {
+      width: 100%;
+      max-height: 360px;
+      object-fit: cover;
+      border-radius: 14px;
+      display: block;
+      margin-bottom: 12px;
+    }
+
+    footer {
+      text-align: center;
+      color: #777;
+      padding: 24px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <main>
+
+    <h1>GRAB IT</h1>
+
+    <p class="sub">
+      Simple YouTube video downloader
+    </p>
+
+    <section class="box">
+
+      <input
+        id="url"
+        type="url"
+        placeholder="Paste YouTube URL here"
+      >
+
+      <select id="quality">
+        <option>Best available</option>
+        <option>720p</option>
+        <option>480p</option>
+        <option>360p</option>
+      </select>
+
+      <button id="get">
+        GET VIDEO
+      </button>
+
+      <div id="preview">
+
+        <img
+          id="thumb"
+          alt="Video thumbnail"
+        >
+
+        <button id="download">
+          DOWNLOAD
+        </button>
+
+      </div>
+
+      <div id="msg"></div>
+
+    </section>
+
+  </main>
+
+  <footer>
+    © 2026 Meheraz
+  </footer>
+
+  <script>
+
+    const $ = (id) =>
+      document.getElementById(id);
+
+
+    function youtubeId(value) {
+
+      try {
+
+        const u = new URL(value);
+
+        const host =
+          u.hostname
+            .toLowerCase()
+            .replace(/^www\./, "");
+
+
+        if (host === "youtu.be") {
+
+          return (
+            u.pathname
+              .slice(1)
+              .split("/")[0] || null
+          );
+
+        }
+
+
+        if (
+          (host === "youtube.com" ||
+           host.endsWith(".youtube.com")) &&
+          u.searchParams.get("v")
+        ) {
+
+          return u.searchParams.get("v");
+
+        }
+
+      } catch {}
+
+      return null;
+    }
+
+
+    function showPreview() {
+
+      const value =
+        $("url").value.trim();
+
+      const id =
+        youtubeId(value);
+
+
+      $("msg").textContent = "";
+
+      $("preview").style.display =
+        "none";
+
+
+      if (!value) {
+
+        $("msg").textContent =
+          "Paste a YouTube URL first.";
+
+        return;
+      }
+
+
+      if (!id) {
+
+        $("msg").textContent =
+          "Please enter a valid YouTube URL.";
+
+        return;
+      }
+
+
+      $("thumb").src =
+        `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+
+
+      $("msg").textContent =
+        "Video link detected ✓";
+
+
+      $("preview").style.display =
+        "block";
+    }
+
+
+    $("get").onclick =
+      showPreview;
+
+
+    $("url").addEventListener(
+      "keydown",
+      (event) => {
+
+        if (event.key === "Enter") {
+          showPreview();
+        }
+
+      }
+    );
+
+
+    $("download").onclick = () => {
+
+      const value =
+        $("url").value.trim();
+
+
+      if (!youtubeId(value)) {
+
+        $("msg").textContent =
+          "Please enter a valid YouTube URL.";
+
+        return;
+      }
+
+
+      $("download").disabled =
+        true;
+
+      $("download").textContent =
+        "DOWNLOADING…";
+
+
+      $("msg").textContent =
+        "Preparing your download…";
+
+
+      window.location.href =
+        `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent($("quality").value)}`;
+
+
+      setTimeout(() => {
+
+        $("download").disabled =
+          false;
+
+        $("download").textContent =
+          "DOWNLOAD";
+
+      }, 10000);
+
+    };
+
+  </script>
+
+</body>
+</html>
