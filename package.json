@@ -1,6 +1,6 @@
 {
-  "name": "youtube-downloader-backend",
-  "version": "3.0.0",
+  "name": "grab-it-youtube-downloader",
+  "version": "1.0.0",
   "private": true,
   "main": "index.js",
   "scripts": {
