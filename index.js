@@ -1,40 +1,37 @@
 const express = require("express");
+const path = require("path");
 
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 const YOINKU_API_KEY = process.env.YOINKU_API_KEY;
 const YOINKU_BASE = "https://yoinku.com/api/v1";
 
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+app.use(express.static(path.join(__dirname, "public")));
 
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
-  next();
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    yoinkuConfigured: Boolean(YOINKU_API_KEY)
+  });
 });
 
-function isYoutubeUrl(value) {
+function isYouTubeUrl(value) {
   try {
     const u = new URL(value);
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
 
     if (host === "youtu.be") {
-      return !!u.pathname.slice(1);
+      return Boolean(u.pathname.slice(1));
     }
 
-    if (
+    return (
       (host === "youtube.com" || host.endsWith(".youtube.com")) &&
-      u.searchParams.get("v")
-    ) {
-      return true;
-    }
-  } catch (_) {}
-
-  return false;
+      Boolean(u.searchParams.get("v"))
+    );
+  } catch {
+    return false;
+  }
 }
 
 function pickFormat(formats, quality) {
@@ -44,8 +41,8 @@ function pickFormat(formats, quality) {
         f &&
         f.kind === "video" &&
         f.container === "mp4" &&
-        f.hasVideo &&
-        f.hasAudio
+        f.hasVideo === true &&
+        f.hasAudio === true
     )
     .map(f => ({
       ...f,
@@ -62,7 +59,9 @@ function pickFormat(formats, quality) {
     return videos[0];
   }
 
-  const wanted = Number(String(quality).replace("p", ""));
+  const wanted = Number(
+    String(quality).replace("p", "")
+  );
 
   if (!wanted) {
     return videos[0];
@@ -75,8 +74,10 @@ function pickFormat(formats, quality) {
   );
 }
 
-async function yoinku(path, params) {
-  const url = new URL(`${YOINKU_BASE}${path}`);
+async function yoinkuJson(endpoint, params) {
+  const url = new URL(
+    `${YOINKU_BASE}${endpoint}`
+  );
 
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
@@ -84,32 +85,24 @@ async function yoinku(path, params) {
 
   const response = await fetch(url, {
     headers: {
-      "x-api-key": YOINKU_API_KEY
+      "x-api-key": YOINKU_API_KEY,
+      "Accept": "application/json"
     }
   });
 
-  const data = await response.json().catch(() => null);
+  const text = await response.text();
+
+  let data = null;
+
+  try {
+    data = JSON.parse(text);
+  } catch {}
 
   return {
     response,
     data
   };
 }
-
-app.get("/", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "GRAB IT backend",
-    provider: "Yoinku"
-  });
-});
-
-app.get("/health", (_req, res) => {
-  res.json({
-    ok: true,
-    yoinkuConfigured: Boolean(YOINKU_API_KEY)
-  });
-});
 
 app.get("/api/download", async (req, res) => {
   if (!YOINKU_API_KEY) {
@@ -118,21 +111,27 @@ app.get("/api/download", async (req, res) => {
     });
   }
 
-  const url = String(req.query.url || "").trim();
+  const youtubeUrl = String(
+    req.query.url || ""
+  ).trim();
+
   const quality = String(
     req.query.quality || "Best available"
   ).trim();
 
-  if (!url || !isYoutubeUrl(url)) {
+  if (!youtubeUrl || !isYouTubeUrl(youtubeUrl)) {
     return res.status(400).json({
       error: "Please provide a valid YouTube URL."
     });
   }
 
   try {
-    const infoResult = await yoinku("/info", {
-      url
-    });
+    const infoResult = await yoinkuJson(
+      "/info",
+      {
+        url: youtubeUrl
+      }
+    );
 
     if (
       !infoResult.response.ok ||
@@ -143,13 +142,17 @@ app.get("/api/download", async (req, res) => {
       ).json({
         error: "Yoinku info request failed",
         details:
+          infoResult.data?.error?.message ||
           infoResult.data?.error ||
           "Unknown error"
       });
     }
 
+    const formats =
+      infoResult.data?.data?.formats || [];
+
     const format = pickFormat(
-      infoResult.data.data?.formats,
+      formats,
       quality
     );
 
@@ -160,65 +163,108 @@ app.get("/api/download", async (req, res) => {
       });
     }
 
-    const downloadResult = await yoinku("/download", {
-      url,
-      format: format.id,
-      redirect: "1"
-    });
+    const downloadUrl = new URL(
+      `${YOINKU_BASE}/download`
+    );
 
-    if (
-      downloadResult.response.status >= 300 &&
-      downloadResult.response.status < 400
-    ) {
-      const location =
-        downloadResult.response.headers.get("location");
+    downloadUrl.searchParams.set(
+      "url",
+      youtubeUrl
+    );
 
-      if (location) {
-        return res.redirect(302, location);
+    downloadUrl.searchParams.set(
+      "format",
+      format.id
+    );
+
+    downloadUrl.searchParams.set(
+      "redirect",
+      "1"
+    );
+
+    const downloadResponse = await fetch(
+      downloadUrl,
+      {
+        redirect: "manual",
+        headers: {
+          "x-api-key": YOINKU_API_KEY,
+          "Accept": "application/json"
+        }
       }
-    }
+    );
 
-    if (!downloadResult.response.ok) {
-      return res.status(
-        downloadResult.response.status || 502
-      ).json({
-        error: "Yoinku download request failed",
-        details:
-          downloadResult.data?.error ||
-          "Unknown error"
-      });
-    }
+    const location =
+      downloadResponse.headers.get("location");
 
-    if (downloadResult.data?.url) {
+    if (location) {
       return res.redirect(
         302,
-        downloadResult.data.url
+        location
       );
     }
 
-    return res.status(502).json({
+    const text =
+      await downloadResponse.text();
+
+    let data = null;
+
+    try {
+      data = JSON.parse(text);
+    } catch {}
+
+    if (
+      downloadResponse.ok &&
+      data?.ok &&
+      data?.url
+    ) {
+      return res.redirect(
+        302,
+        data.url
+      );
+    }
+
+    return res.status(
+      downloadResponse.status || 502
+    ).json({
       error:
-        "Yoinku did not return a download URL."
+        "Yoinku did not return a download URL.",
+      details:
+        data?.error?.message ||
+        data?.error ||
+        "Unexpected response from Yoinku."
     });
+
   } catch (error) {
-    console.error("Yoinku error:", error);
+    console.error(
+      "Download error:",
+      error
+    );
 
     return res.status(502).json({
-      error: "Unable to contact Yoinku",
+      error:
+        "Unable to contact Yoinku.",
       details:
-        error?.message || String(error)
+        error?.message ||
+        String(error)
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(
-    `GRAB IT backend running on port ${PORT}`
-  );
-
-  console.log(
-    `Yoinku API key configured: ${
-      YOINKU_API_KEY ? "yes" : "no"
-    }`
+app.get("*", (_req, res) => {
+  res.sendFile(
+    path.join(
+      __dirname,
+      "public",
+      "index.html"
+    )
   );
 });
+
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      `GRAB IT running on port ${PORT}`
+    );
+  }
+);
