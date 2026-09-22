@@ -2,11 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width,initial-scale=1"
-  >
+  <meta name="viewport" content="width=device-width,initial-scale=1">
 
   <title>GRAB IT — YouTube Downloader</title>
 
@@ -86,10 +82,19 @@
     }
 
     #msg {
-      min-height: 24px;
+      min-height: 28px;
       margin-top: 14px;
       text-align: center;
       color: #bbb;
+      line-height: 1.5;
+    }
+
+    #timer {
+      display: none;
+      text-align: center;
+      color: #777;
+      font-size: 13px;
+      margin-top: 8px;
     }
 
     #preview {
@@ -132,6 +137,7 @@
       id="url"
       type="url"
       placeholder="Paste YouTube URL here"
+      autocomplete="off"
     >
 
     <select id="quality">
@@ -160,6 +166,10 @@
 
     <div id="msg"></div>
 
+    <div id="timer">
+      Waiting: 0s
+    </div>
+
   </section>
 
 </main>
@@ -171,288 +181,225 @@
 
 <script>
 
-const $ = (id) =>
-  document.getElementById(id);
+  const $ = (id) => document.getElementById(id);
 
+  let timerInterval = null;
+  let startTime = 0;
+  let downloading = false;
 
-function youtubeId(value) {
 
-  try {
+  function youtubeId(value) {
 
-    const u = new URL(value);
+    try {
 
-    const host =
-      u.hostname
-        .toLowerCase()
-        .replace(/^www\./, "");
+      const u = new URL(value.trim());
 
+      const host =
+        u.hostname
+          .toLowerCase()
+          .replace(/^www\./, "");
 
-    if (host === "youtu.be") {
 
-      return (
-        u.pathname
-          .slice(1)
-          .split("/")[0] || null
-      );
+      if (host === "youtu.be") {
 
-    }
-
-
-    if (
-      (host === "youtube.com" ||
-       host.endsWith(".youtube.com")) &&
-      u.searchParams.get("v")
-    ) {
-
-      return u.searchParams.get("v");
-
-    }
-
-  } catch {}
-
-  return null;
-}
-
-
-function showPreview() {
-
-  const value =
-    $("url").value.trim();
-
-  const id =
-    youtubeId(value);
-
-
-  $("msg").textContent = "";
-
-  $("preview").style.display =
-    "none";
-
-
-  if (!value) {
-
-    $("msg").textContent =
-      "Paste a YouTube URL first.";
-
-    return;
-  }
-
-
-  if (!id) {
-
-    $("msg").textContent =
-      "Please enter a valid YouTube URL.";
-
-    return;
-  }
-
-
-  $("thumb").src =
-    `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
-
-
-  $("msg").textContent =
-    "Video link detected ✓";
-
-
-  $("preview").style.display =
-    "block";
-}
-
-
-$("get").onclick =
-  showPreview;
-
-
-$("url").addEventListener(
-  "keydown",
-  (event) => {
-
-    if (event.key === "Enter") {
-      showPreview();
-    }
-
-  }
-);
-
-
-/*
-  NEW DOWNLOAD SYSTEM
-
-  1. Start job
-  2. Get job ID
-  3. Poll status
-  4. When ready -> direct download
-*/
-
-$("download").onclick = async () => {
-
-  const value =
-    $("url").value.trim();
-
-  const quality =
-    $("quality").value;
-
-
-  if (!youtubeId(value)) {
-
-    $("msg").textContent =
-      "Please enter a valid YouTube URL.";
-
-    return;
-  }
-
-
-  const button =
-    $("download");
-
-  button.disabled = true;
-
-  button.textContent =
-    "PREPARING…";
-
-  $("msg").textContent =
-    "Preparing your video…";
-
-
-  try {
-
-    /*
-      START JOB
-    */
-
-    const response =
-      await fetch(
-        `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent(quality)}`
-      );
-
-
-    const data =
-      await response.json();
-
-
-    if (!response.ok || !data.jobId) {
-
-      throw new Error(
-        data.error ||
-        "Could not start download."
-      );
-    }
-
-
-    const jobId =
-      data.jobId;
-
-
-    /*
-      POLL STATUS
-    */
-
-    let attempts = 0;
-
-    const maxAttempts = 180;
-
-
-    while (attempts < maxAttempts) {
-
-      await new Promise(
-        resolve =>
-          setTimeout(resolve, 2000)
-      );
-
-
-      attempts++;
-
-
-      const statusResponse =
-        await fetch(
-          `/api/status/${encodeURIComponent(jobId)}`
+        return (
+          u.pathname
+            .slice(1)
+            .split("/")[0] || null
         );
 
-
-      const status =
-        await statusResponse.json();
+      }
 
 
       if (
-        status.status ===
-        "ready"
+        host === "youtube.com" ||
+        host.endsWith(".youtube.com")
       ) {
 
-        $("msg").textContent =
-          "Your video is ready ✓";
+        return (
+          u.searchParams.get("v") || null
+        );
+
+      }
+
+    } catch {}
+
+    return null;
+  }
 
 
-        button.textContent =
-          "DOWNLOAD NOW";
+  function stopTimer() {
+
+    if (timerInterval) {
+
+      clearInterval(timerInterval);
+
+      timerInterval = null;
+
+    }
+
+  }
 
 
-        /*
-          IMPORTANT:
-          Download directly from Yoinku.
-          Railway does NOT transfer the video.
-        */
+  function startTimer() {
 
-        window.location.href =
-          status.url;
+    stopTimer();
+
+    startTime = Date.now();
+
+    $("timer").style.display = "block";
+
+    timerInterval = setInterval(() => {
+
+      const seconds =
+        Math.floor(
+          (Date.now() - startTime) / 1000
+        );
+
+      $("timer").textContent =
+        `Server processing: ${seconds}s`;
+
+    }, 1000);
+
+  }
 
 
-        setTimeout(() => {
+  function showPreview() {
 
-          button.disabled = false;
+    const value =
+      $("url").value.trim();
 
-          button.textContent =
-            "DOWNLOAD";
+    const id =
+      youtubeId(value);
 
-        }, 5000);
 
+    $("msg").textContent = "";
+
+    $("preview").style.display = "none";
+
+
+    if (!value) {
+
+      $("msg").textContent =
+        "Paste a YouTube URL first.";
+
+      return;
+
+    }
+
+
+    if (!id) {
+
+      $("msg").textContent =
+        "Please enter a valid YouTube URL.";
+
+      return;
+
+    }
+
+
+    $("thumb").src =
+      `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+
+
+    $("msg").textContent =
+      "Video link detected ✓";
+
+
+    $("preview").style.display =
+      "block";
+
+  }
+
+
+  $("get").addEventListener(
+    "click",
+    showPreview
+  );
+
+
+  $("url").addEventListener(
+    "keydown",
+    (event) => {
+
+      if (event.key === "Enter") {
+
+        showPreview();
+
+      }
+
+    }
+  );
+
+
+  $("download").addEventListener(
+    "click",
+    () => {
+
+      if (downloading) {
 
         return;
+
       }
 
 
-      if (
-        status.status ===
-        "error"
-      ) {
+      const value =
+        $("url").value.trim();
 
-        throw new Error(
-          status.error ||
-          "Download failed."
-        );
+      const id =
+        youtubeId(value);
+
+
+      if (!id) {
+
+        $("msg").textContent =
+          "Please enter a valid YouTube URL.";
+
+        return;
+
       }
+
+
+      const quality =
+        $("quality").value;
+
+
+      downloading = true;
+
+
+      $("download").disabled =
+        true;
+
+      $("get").disabled =
+        true;
+
+      $("download").textContent =
+        "PREPARING…";
 
 
       $("msg").textContent =
-        status.progress ||
-        "Preparing your video…";
+        "Contacting download server…";
+
+
+      startTimer();
+
+
+      const apiUrl =
+        `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent(quality)}`;
+
+
+      /*
+        Use the normal browser navigation.
+
+        IMPORTANT:
+        Do not manually add "&quality=..." inside the
+        YouTube URL itself.
+      */
+
+      window.location.assign(apiUrl);
 
     }
-
-
-    throw new Error(
-      "The video is taking too long to prepare. Please try again."
-    );
-
-
-  } catch (error) {
-
-    console.error(error);
-
-
-    $("msg").textContent =
-      error?.message ||
-      "Something went wrong.";
-
-
-    button.disabled =
-      false;
-
-    button.textContent =
-      "DOWNLOAD";
-  }
-
-};
+  );
 
 </script>
 
