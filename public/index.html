@@ -86,6 +86,7 @@
       margin-top: 14px;
       text-align: center;
       color: #bbb;
+      line-height: 1.5;
     }
 
     #preview {
@@ -101,6 +102,10 @@
       border-radius: 14px;
       display: block;
       margin-bottom: 12px;
+    }
+
+    #download {
+      display: none;
     }
 
     footer {
@@ -164,6 +169,7 @@
     © 2026 Meheraz
   </footer>
 
+
   <script>
 
     const $ = (id) =>
@@ -223,6 +229,9 @@
       $("preview").style.display =
         "none";
 
+      $("download").style.display =
+        "none";
+
 
       if (!value) {
 
@@ -252,6 +261,10 @@
 
       $("preview").style.display =
         "block";
+
+
+      $("download").style.display =
+        "block";
     }
 
 
@@ -271,10 +284,16 @@
     );
 
 
-    $("download").onclick = () => {
+    /*
+      Start the download job.
+    */
+    $("download").onclick = async () => {
 
       const value =
         $("url").value.trim();
+
+      const quality =
+        $("quality").value;
 
 
       if (!youtubeId(value)) {
@@ -289,29 +308,228 @@
       $("download").disabled =
         true;
 
-      $("download").textContent =
-        "DOWNLOADING…";
+      $("get").disabled =
+        true;
 
+      $("download").textContent =
+        "PREPARING…";
 
       $("msg").textContent =
         "Preparing your download…";
 
 
-      window.location.href =
-        `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent($("quality").value)}`;
+      try {
+
+        /*
+          Start backend job.
+        */
+        const response =
+          await fetch(
+            `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent(quality)}`
+          );
 
 
-      setTimeout(() => {
+        const data =
+          await response.json();
+
+
+        if (!response.ok || !data.ok) {
+
+          throw new Error(
+            data.error ||
+            "Unable to start download."
+          );
+        }
+
+
+        const jobId =
+          data.jobId;
+
+
+        if (!jobId) {
+
+          throw new Error(
+            "Server did not return a download job."
+          );
+        }
+
+
+        /*
+          Poll the job status.
+        */
+        await waitForDownload(jobId);
+
+
+      } catch (error) {
+
+        console.error(error);
+
+        $("msg").textContent =
+          error.message ||
+          "Download failed.";
 
         $("download").disabled =
           false;
 
+        $("get").disabled =
+          false;
+
         $("download").textContent =
           "DOWNLOAD";
-
-      }, 10000);
+      }
 
     };
+
+
+    /*
+      Wait until the backend has a
+      ready download URL.
+    */
+    async function waitForDownload(jobId) {
+
+      let attempts = 0;
+
+      const maxAttempts = 120;
+
+
+      while (attempts < maxAttempts) {
+
+        attempts++;
+
+
+        await sleep(3000);
+
+
+        const response =
+          await fetch(
+            `/api/status/${encodeURIComponent(jobId)}`
+          );
+
+
+        let data = null;
+
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+
+
+        if (
+          !response.ok ||
+          !data
+        ) {
+
+          throw new Error(
+            data?.error ||
+            "Unable to check download status."
+          );
+        }
+
+
+        /*
+          Still processing.
+        */
+        if (
+          data.status ===
+          "processing"
+        ) {
+
+          $("download").textContent =
+            "PROCESSING…";
+
+          $("msg").textContent =
+            "Yoinku is preparing your video…";
+
+          continue;
+        }
+
+
+        /*
+          Download is ready.
+        */
+        if (
+          data.status ===
+          "ready" &&
+          data.url
+        ) {
+
+          $("download").textContent =
+            "READY ✓";
+
+          $("msg").textContent =
+            "Download ready — starting…";
+
+
+          /*
+            Navigate directly to Yoinku's
+            short-lived download URL.
+          */
+          window.location.href =
+            data.url;
+
+
+          /*
+            Give the browser a moment to
+            start the download.
+          */
+          setTimeout(() => {
+
+            $("download").disabled =
+              false;
+
+            $("get").disabled =
+              false;
+
+            $("download").textContent =
+              "DOWNLOAD";
+
+          }, 5000);
+
+
+          return;
+        }
+
+
+        /*
+          Backend reported an error.
+        */
+        if (
+          data.status ===
+          "error"
+        ) {
+
+          throw new Error(
+            data.error ||
+            "Yoinku could not prepare the video."
+          );
+        }
+
+
+        throw new Error(
+          "Unknown download status."
+        );
+      }
+
+
+      /*
+        Maximum waiting time:
+        120 × 3 seconds = 6 minutes.
+      */
+      throw new Error(
+        "The download is taking too long. Please try again."
+      );
+    }
+
+
+    function sleep(ms) {
+
+      return new Promise(
+        resolve =>
+          setTimeout(resolve, ms)
+      );
+
+    }
 
   </script>
 
