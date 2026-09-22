@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  >
 
   <title>GRAB IT — YouTube Downloader</title>
 
@@ -86,7 +90,6 @@
       margin-top: 14px;
       text-align: center;
       color: #bbb;
-      line-height: 1.5;
     }
 
     #preview {
@@ -104,10 +107,6 @@
       margin-bottom: 12px;
     }
 
-    #download {
-      display: none;
-    }
-
     footer {
       text-align: center;
       color: #777;
@@ -119,419 +118,343 @@
 
 <body>
 
-  <main>
+<main>
 
-    <h1>GRAB IT</h1>
+  <h1>GRAB IT</h1>
 
-    <p class="sub">
-      Simple YouTube video downloader
-    </p>
+  <p class="sub">
+    Simple YouTube video downloader
+  </p>
 
-    <section class="box">
+  <section class="box">
 
-      <input
-        id="url"
-        type="url"
-        placeholder="Paste YouTube URL here"
+    <input
+      id="url"
+      type="url"
+      placeholder="Paste YouTube URL here"
+    >
+
+    <select id="quality">
+      <option>Best available</option>
+      <option>720p</option>
+      <option>480p</option>
+      <option>360p</option>
+    </select>
+
+    <button id="get">
+      GET VIDEO
+    </button>
+
+    <div id="preview">
+
+      <img
+        id="thumb"
+        alt="Video thumbnail"
       >
 
-      <select id="quality">
-        <option>Best available</option>
-        <option>720p</option>
-        <option>480p</option>
-        <option>360p</option>
-      </select>
-
-      <button id="get">
-        GET VIDEO
+      <button id="download">
+        DOWNLOAD
       </button>
 
-      <div id="preview">
+    </div>
 
-        <img
-          id="thumb"
-          alt="Video thumbnail"
-        >
+    <div id="msg"></div>
 
-        <button id="download">
-          DOWNLOAD
-        </button>
+  </section>
 
-      </div>
+</main>
 
-      <div id="msg"></div>
-
-    </section>
-
-  </main>
-
-  <footer>
-    © 2026 Meheraz
-  </footer>
+<footer>
+  © 2026 Meheraz
+</footer>
 
 
-  <script>
+<script>
 
-    const $ = (id) =>
-      document.getElementById(id);
-
-
-    function youtubeId(value) {
-
-      try {
-
-        const u = new URL(value);
-
-        const host =
-          u.hostname
-            .toLowerCase()
-            .replace(/^www\./, "");
+const $ = (id) =>
+  document.getElementById(id);
 
 
-        if (host === "youtu.be") {
+function youtubeId(value) {
 
-          return (
-            u.pathname
-              .slice(1)
-              .split("/")[0] || null
-          );
+  try {
 
-        }
+    const u = new URL(value);
+
+    const host =
+      u.hostname
+        .toLowerCase()
+        .replace(/^www\./, "");
 
 
-        if (
-          (host === "youtube.com" ||
-           host.endsWith(".youtube.com")) &&
-          u.searchParams.get("v")
-        ) {
+    if (host === "youtu.be") {
 
-          return u.searchParams.get("v");
+      return (
+        u.pathname
+          .slice(1)
+          .split("/")[0] || null
+      );
 
-        }
-
-      } catch {}
-
-      return null;
     }
 
 
-    function showPreview() {
+    if (
+      (host === "youtube.com" ||
+       host.endsWith(".youtube.com")) &&
+      u.searchParams.get("v")
+    ) {
 
-      const value =
-        $("url").value.trim();
+      return u.searchParams.get("v");
 
-      const id =
-        youtubeId(value);
+    }
 
+  } catch {}
 
-      $("msg").textContent = "";
-
-      $("preview").style.display =
-        "none";
-
-      $("download").style.display =
-        "none";
+  return null;
+}
 
 
-      if (!value) {
+function showPreview() {
 
-        $("msg").textContent =
-          "Paste a YouTube URL first.";
+  const value =
+    $("url").value.trim();
 
-        return;
-      }
-
-
-      if (!id) {
-
-        $("msg").textContent =
-          "Please enter a valid YouTube URL.";
-
-        return;
-      }
+  const id =
+    youtubeId(value);
 
 
-      $("thumb").src =
-        `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+  $("msg").textContent = "";
+
+  $("preview").style.display =
+    "none";
 
 
-      $("msg").textContent =
-        "Video link detected ✓";
+  if (!value) {
+
+    $("msg").textContent =
+      "Paste a YouTube URL first.";
+
+    return;
+  }
 
 
-      $("preview").style.display =
-        "block";
+  if (!id) {
+
+    $("msg").textContent =
+      "Please enter a valid YouTube URL.";
+
+    return;
+  }
 
 
-      $("download").style.display =
-        "block";
+  $("thumb").src =
+    `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+
+
+  $("msg").textContent =
+    "Video link detected ✓";
+
+
+  $("preview").style.display =
+    "block";
+}
+
+
+$("get").onclick =
+  showPreview;
+
+
+$("url").addEventListener(
+  "keydown",
+  (event) => {
+
+    if (event.key === "Enter") {
+      showPreview();
+    }
+
+  }
+);
+
+
+/*
+  NEW DOWNLOAD SYSTEM
+
+  1. Start job
+  2. Get job ID
+  3. Poll status
+  4. When ready -> direct download
+*/
+
+$("download").onclick = async () => {
+
+  const value =
+    $("url").value.trim();
+
+  const quality =
+    $("quality").value;
+
+
+  if (!youtubeId(value)) {
+
+    $("msg").textContent =
+      "Please enter a valid YouTube URL.";
+
+    return;
+  }
+
+
+  const button =
+    $("download");
+
+  button.disabled = true;
+
+  button.textContent =
+    "PREPARING…";
+
+  $("msg").textContent =
+    "Preparing your video…";
+
+
+  try {
+
+    /*
+      START JOB
+    */
+
+    const response =
+      await fetch(
+        `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent(quality)}`
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok || !data.jobId) {
+
+      throw new Error(
+        data.error ||
+        "Could not start download."
+      );
     }
 
 
-    $("get").onclick =
-      showPreview;
-
-
-    $("url").addEventListener(
-      "keydown",
-      (event) => {
-
-        if (event.key === "Enter") {
-          showPreview();
-        }
-
-      }
-    );
+    const jobId =
+      data.jobId;
 
 
     /*
-      Start the download job.
+      POLL STATUS
     */
-    $("download").onclick = async () => {
 
-      const value =
-        $("url").value.trim();
+    let attempts = 0;
 
-      const quality =
-        $("quality").value;
+    const maxAttempts = 180;
 
 
-      if (!youtubeId(value)) {
+    while (attempts < maxAttempts) {
+
+      await new Promise(
+        resolve =>
+          setTimeout(resolve, 2000)
+      );
+
+
+      attempts++;
+
+
+      const statusResponse =
+        await fetch(
+          `/api/status/${encodeURIComponent(jobId)}`
+        );
+
+
+      const status =
+        await statusResponse.json();
+
+
+      if (
+        status.status ===
+        "ready"
+      ) {
 
         $("msg").textContent =
-          "Please enter a valid YouTube URL.";
+          "Your video is ready ✓";
+
+
+        button.textContent =
+          "DOWNLOAD NOW";
+
+
+        /*
+          IMPORTANT:
+          Download directly from Yoinku.
+          Railway does NOT transfer the video.
+        */
+
+        window.location.href =
+          status.url;
+
+
+        setTimeout(() => {
+
+          button.disabled = false;
+
+          button.textContent =
+            "DOWNLOAD";
+
+        }, 5000);
+
 
         return;
       }
 
 
-      $("download").disabled =
-        true;
-
-      $("get").disabled =
-        true;
-
-      $("download").textContent =
-        "PREPARING…";
-
-      $("msg").textContent =
-        "Preparing your download…";
-
-
-      try {
-
-        /*
-          Start backend job.
-        */
-        const response =
-          await fetch(
-            `/api/download?url=${encodeURIComponent(value)}&quality=${encodeURIComponent(quality)}`
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (!response.ok || !data.ok) {
-
-          throw new Error(
-            data.error ||
-            "Unable to start download."
-          );
-        }
-
-
-        const jobId =
-          data.jobId;
-
-
-        if (!jobId) {
-
-          throw new Error(
-            "Server did not return a download job."
-          );
-        }
-
-
-        /*
-          Poll the job status.
-        */
-        await waitForDownload(jobId);
-
-
-      } catch (error) {
-
-        console.error(error);
-
-        $("msg").textContent =
-          error.message ||
-          "Download failed.";
-
-        $("download").disabled =
-          false;
-
-        $("get").disabled =
-          false;
-
-        $("download").textContent =
-          "DOWNLOAD";
-      }
-
-    };
-
-
-    /*
-      Wait until the backend has a
-      ready download URL.
-    */
-    async function waitForDownload(jobId) {
-
-      let attempts = 0;
-
-      const maxAttempts = 120;
-
-
-      while (attempts < maxAttempts) {
-
-        attempts++;
-
-
-        await sleep(3000);
-
-
-        const response =
-          await fetch(
-            `/api/status/${encodeURIComponent(jobId)}`
-          );
-
-
-        let data = null;
-
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
-        }
-
-
-        if (
-          !response.ok ||
-          !data
-        ) {
-
-          throw new Error(
-            data?.error ||
-            "Unable to check download status."
-          );
-        }
-
-
-        /*
-          Still processing.
-        */
-        if (
-          data.status ===
-          "processing"
-        ) {
-
-          $("download").textContent =
-            "PROCESSING…";
-
-          $("msg").textContent =
-            "Yoinku is preparing your video…";
-
-          continue;
-        }
-
-
-        /*
-          Download is ready.
-        */
-        if (
-          data.status ===
-          "ready" &&
-          data.url
-        ) {
-
-          $("download").textContent =
-            "READY ✓";
-
-          $("msg").textContent =
-            "Download ready — starting…";
-
-
-          /*
-            Navigate directly to Yoinku's
-            short-lived download URL.
-          */
-          window.location.href =
-            data.url;
-
-
-          /*
-            Give the browser a moment to
-            start the download.
-          */
-          setTimeout(() => {
-
-            $("download").disabled =
-              false;
-
-            $("get").disabled =
-              false;
-
-            $("download").textContent =
-              "DOWNLOAD";
-
-          }, 5000);
-
-
-          return;
-        }
-
-
-        /*
-          Backend reported an error.
-        */
-        if (
-          data.status ===
-          "error"
-        ) {
-
-          throw new Error(
-            data.error ||
-            "Yoinku could not prepare the video."
-          );
-        }
-
+      if (
+        status.status ===
+        "error"
+      ) {
 
         throw new Error(
-          "Unknown download status."
+          status.error ||
+          "Download failed."
         );
       }
 
 
-      /*
-        Maximum waiting time:
-        120 × 3 seconds = 6 minutes.
-      */
-      throw new Error(
-        "The download is taking too long. Please try again."
-      );
-    }
-
-
-    function sleep(ms) {
-
-      return new Promise(
-        resolve =>
-          setTimeout(resolve, ms)
-      );
+      $("msg").textContent =
+        status.progress ||
+        "Preparing your video…";
 
     }
 
-  </script>
+
+    throw new Error(
+      "The video is taking too long to prepare. Please try again."
+    );
+
+
+  } catch (error) {
+
+    console.error(error);
+
+
+    $("msg").textContent =
+      error?.message ||
+      "Something went wrong.";
+
+
+    button.disabled =
+      false;
+
+    button.textContent =
+      "DOWNLOAD";
+  }
+
+};
+
+</script>
 
 </body>
 </html>
