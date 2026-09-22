@@ -1,6 +1,5 @@
 const express = require("express");
 const path = require("path");
-const crypto = require("crypto");
 
 const app = express();
 
@@ -9,9 +8,6 @@ const YOINKU_API_KEY = process.env.YOINKU_API_KEY;
 const YOINKU_BASE = "https://yoinku.com/api/v1";
 
 app.use(express.static(path.join(__dirname, "public")));
-
-// Temporary in-memory job storage
-const jobs = new Map();
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -107,105 +103,14 @@ async function yoinkuJson(endpoint, params) {
 }
 
 /*
-  Background download preparation
-*/
-async function prepareDownload(jobId, youtubeUrl, quality) {
-  try {
-    jobs.set(jobId, {
-      status: "processing",
-      progress: "Getting video information..."
-    });
+  Download endpoint
 
-    // STEP 1: Get video information
-    const infoResult = await yoinkuJson("/info", {
-      url: youtubeUrl
-    });
+  IMPORTANT:
+  We stream heartbeat data while Yoinku is preparing
+  the download URL.
 
-    if (
-      !infoResult.response.ok ||
-      !infoResult.data?.ok
-    ) {
-      throw new Error(
-        infoResult.data?.error?.message ||
-        infoResult.data?.error ||
-        "Yoinku info request failed."
-      );
-    }
-
-    const formats =
-      infoResult.data?.data?.formats || [];
-
-    const format = pickFormat(
-      formats,
-      quality
-    );
-
-    if (!format?.id) {
-      throw new Error(
-        "No compatible MP4 video format was returned by Yoinku."
-      );
-    }
-
-    jobs.set(jobId, {
-      status: "processing",
-      progress: "Preparing video file..."
-    });
-
-    // STEP 2: Ask Yoinku for the download URL
-    // IMPORTANT:
-    // Do NOT use redirect=1 here.
-    // We want Yoinku's JSON response containing the URL.
-    const downloadResult = await yoinkuJson(
-      "/download",
-      {
-        url: youtubeUrl,
-        format: format.id
-      }
-    );
-
-    if (
-      !downloadResult.response.ok ||
-      !downloadResult.data?.ok ||
-      !downloadResult.data?.url
-    ) {
-      throw new Error(
-        downloadResult.data?.error?.message ||
-        downloadResult.data?.error ||
-        "Yoinku did not return a download URL."
-      );
-    }
-
-    jobs.set(jobId, {
-      status: "ready",
-      progress: "Ready",
-      url: downloadResult.data.url,
-      filename:
-        downloadResult.data.filename ||
-        "video.mp4"
-    });
-
-    console.log(
-      `Job ${jobId} is ready`
-    );
-
-  } catch (error) {
-    console.error(
-      `Job ${jobId} failed:`,
-      error
-    );
-
-    jobs.set(jobId, {
-      status: "error",
-      error:
-        error?.message ||
-        String(error)
-    });
-  }
-}
-
-
-/*
-  START DOWNLOAD JOB
+  This prevents the Railway/browser connection from
+  sitting completely silent for a long time.
 */
 app.get("/api/download", async (req, res) => {
   if (!YOINKU_API_KEY) {
@@ -228,100 +133,229 @@ app.get("/api/download", async (req, res) => {
     });
   }
 
-  const jobId = crypto
-    .randomBytes(12)
-    .toString("hex");
+  /*
+    We use SSE-style streaming.
 
-  jobs.set(jobId, {
-    status: "queued",
-    progress: "Starting..."
-  });
+    Browser receives a heartbeat every 20 seconds
+    while Yoinku is working.
+  */
 
-  // IMPORTANT:
-  // Do NOT await this.
-  // Let it run in the background.
-  prepareDownload(
-    jobId,
-    youtubeUrl,
-    quality
+  res.status(200);
+
+  res.setHeader(
+    "Content-Type",
+    "text/event-stream; charset=utf-8"
   );
 
-  // Respond immediately
-  res.json({
-    ok: true,
-    jobId
-  });
-});
-
-
-/*
-  CHECK JOB STATUS
-*/
-app.get("/api/status/:jobId", (req, res) => {
-  const job = jobs.get(
-    req.params.jobId
+  res.setHeader(
+    "Cache-Control",
+    "no-cache, no-transform"
   );
 
-  if (!job) {
-    return res.status(404).json({
-      error: "Download job not found."
-    });
+  res.setHeader(
+    "Connection",
+    "keep-alive"
+  );
+
+  res.setHeader(
+    "X-Accel-Buffering",
+    "no"
+  );
+
+  if (res.flushHeaders) {
+    res.flushHeaders();
   }
 
-  if (job.status === "ready") {
-    return res.json({
-      ok: true,
-      status: "ready",
-      progress: "Ready",
-      url: job.url,
-      filename: job.filename
-    });
-  }
+  let clientClosed = false;
 
-  if (job.status === "error") {
-    return res.status(500).json({
-      ok: false,
-      status: "error",
-      error: job.error
-    });
-  }
-
-  res.json({
-    ok: true,
-    status: job.status,
-    progress: job.progress
+  req.on("close", () => {
+    clientClosed = true;
   });
-});
 
+  const heartbeat = setInterval(() => {
+    if (!clientClosed && !res.writableEnded) {
+      res.write(
+        `event: progress\ndata: ${JSON.stringify({
+          status: "preparing"
+        })}\n\n`
+      );
+    }
+  }, 20000);
 
-/*
-  Remove old jobs periodically
-*/
-setInterval(() => {
-  const now = Date.now();
+  function finish() {
+    clearInterval(heartbeat);
+  }
 
-  for (const [jobId, job] of jobs.entries()) {
+  try {
+    /*
+      STEP 1
+      Ask Yoinku for available formats.
+    */
+
+    if (!clientClosed) {
+      res.write(
+        `event: progress\ndata: ${JSON.stringify({
+          status: "checking"
+        })}\n\n`
+      );
+    }
+
+    const infoResult = await yoinkuJson(
+      "/info",
+      {
+        url: youtubeUrl
+      }
+    );
+
+    if (clientClosed) {
+      finish();
+      return;
+    }
+
     if (
-      job.createdAt &&
-      now - job.createdAt > 60 * 60 * 1000
+      !infoResult.response.ok ||
+      !infoResult.data?.ok
     ) {
-      jobs.delete(jobId);
+      finish();
+
+      return res.end(
+        `event: error\ndata: ${JSON.stringify({
+          error: "Yoinku info request failed",
+          details:
+            infoResult.data?.error?.message ||
+            infoResult.data?.error ||
+            "Unknown error"
+        })}\n\n`
+      );
+    }
+
+    const formats =
+      infoResult.data?.data?.formats || [];
+
+    const format = pickFormat(
+      formats,
+      quality
+    );
+
+    if (!format?.id) {
+      finish();
+
+      return res.end(
+        `event: error\ndata: ${JSON.stringify({
+          error:
+            "No compatible MP4 video format was returned by Yoinku."
+        })}\n\n`
+      );
+    }
+
+    /*
+      STEP 2
+      Ask Yoinku to create the actual download URL.
+    */
+
+    if (!clientClosed) {
+      res.write(
+        `event: progress\ndata: ${JSON.stringify({
+          status: "creating"
+        })}\n\n`
+      );
+    }
+
+    const downloadUrl =
+      new URL(`${YOINKU_BASE}/download`);
+
+    downloadUrl.searchParams.set(
+      "url",
+      youtubeUrl
+    );
+
+    downloadUrl.searchParams.set(
+      "format",
+      format.id
+    );
+
+    /*
+      IMPORTANT:
+      Do NOT use redirect=1 here.
+
+      We want JSON containing the temporary
+      download URL.
+    */
+
+    const downloadResponse = await fetch(
+      downloadUrl,
+      {
+        headers: {
+          "x-api-key": YOINKU_API_KEY,
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    const text =
+      await downloadResponse.text();
+
+    if (clientClosed) {
+      finish();
+      return;
+    }
+
+    let data = null;
+
+    try {
+      data = JSON.parse(text);
+    } catch {}
+
+    if (
+      downloadResponse.ok &&
+      data?.ok &&
+      data?.url
+    ) {
+      finish();
+
+      res.write(
+        `event: ready\ndata: ${JSON.stringify({
+          url: data.url,
+          filename: data.filename || "video.mp4"
+        })}\n\n`
+      );
+
+      return res.end();
+    }
+
+    finish();
+
+    return res.end(
+      `event: error\ndata: ${JSON.stringify({
+        error:
+          "Yoinku did not return a download URL.",
+        details:
+          data?.error?.message ||
+          data?.error ||
+          "Unexpected response from Yoinku."
+      })}\n\n`
+    );
+
+  } catch (error) {
+    finish();
+
+    console.error(
+      "Download error:",
+      error
+    );
+
+    if (!clientClosed && !res.writableEnded) {
+      return res.end(
+        `event: error\ndata: ${JSON.stringify({
+          error: "Unable to contact Yoinku.",
+          details:
+            error?.message ||
+            String(error)
+        })}\n\n`
+      );
     }
   }
-}, 10 * 60 * 1000);
-
-
-// Store creation time automatically
-const originalSet = jobs.set.bind(jobs);
-
-jobs.set = (key, value) => {
-  if (!value.createdAt) {
-    value.createdAt = Date.now();
-  }
-
-  return originalSet(key, value);
-};
-
+});
 
 app.get("*", (_req, res) => {
   res.sendFile(
@@ -333,9 +367,9 @@ app.get("*", (_req, res) => {
   );
 });
 
-
 app.listen(
   PORT,
+  "0.0.0.0",
   () => {
     console.log(
       `GRAB IT running on port ${PORT}`
